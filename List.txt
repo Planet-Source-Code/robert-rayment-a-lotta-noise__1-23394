@@ -1,0 +1,1552 @@
+     1                                  ; Texture.asm by Robert Rayment  June 2001  V.04
+     2                                  
+     3                                  ; VB
+     4                                  ;
+     5                                  ; ## ASSEMBLER STRUCTURE FOR TEXTURE.BIN ###################
+     6                                  ;
+     7                                  ; Public Type PERLININFO  ' Offsets
+     8                                  ;   PicWidth As Long     ' 0
+     9                                  ;   PicHeight As Long    ' 4
+    10                                  ;   ptLS As Long         ' 8   Pointer to LongSurf()
+    11                                  ;   NoiseSeed  As Long   ' 12
+    12                                  ;   ptRndGrid As Long    ' 16  Pointer to RndGrid()
+    13                                  ;   StartScale As Long   ' 20  Perlin noise scales
+    14                                  ;   LastScale As Long    ' 24
+    15                                  ;   ptPerGrid As Long    ' 28  Pointer to PerGrid()
+    16                                  ;   avmax As Long        ' 32  Max/Min values in PerGrid()
+    17                                  ;   avmin As Long        ' 36
+    18                                  ;   ptzColorWt As Long   ' 40  Pointer to zColorWt()
+    19                                  ;   ptzSineAdds As Long  ' 44  Pointer to zSineAdds()
+    20                                  ;   WoodType As Long     ' 48
+    21                                  ;   MarbleType As Long   ' 52
+    22                                  ;	CosLin As Long       ' 56  0 Cosine, 1 Linear
+    23                                  ;	CycleSpeed As Long   ' 60  1,2,4
+    24                                  ; End Type
+    25                                  ; Public Per As PERLININFO
+    26                                  ;
+    27                                  ; Machine code opcodes
+    28                                  ;
+    29                                  ; OpCode& = 0 Random noise for RndGrid()
+    30                                  ; OpCode& = 1 Perlin noise
+    31                                  ; OpCode& = 2 Wood
+    32                                  ; OpCode& = 4 Marble
+    33                                  ; OpCode& = 8 Smooth
+    34                                  ; OpCode& = 16 Cycling
+    35                                  ;
+    36                                  ; Machine code globals
+    37                                  ;
+    38                                  ; Global InCode() As Byte    ' For holding machine code
+    39                                  ; Global ptMCode             ' Pointer to InCode(1)
+    40                                  ; Global ptPerStruc          ' Pointer to Per.PicWidth
+    41                                  ;
+    42                                  ; Use:-
+    43                                  ;
+    44                                  ; res& = CallWindowProc(ptMCode, ptPerStruc, ptzres, 2&, OpCode&)
+    45                                  ;                                8           12      16  20
+    46                                  
+    47                                  ;-------------------------------------------------------------
+    48                                  %macro movab 2		;name & num of parameters
+    49                                    push dword %2		;2nd param
+    50                                    pop dword %1		;1st param
+    51                                  %endmacro			;use  movab %1,%2
+    52                                  ;Allows eg	movab bmW,[ebx+4]
+    53                                  ;-------------------------------------------------------------
+    54                                  
+    55                                  ; INPUT DATA STORE
+    56                                  ; Long integers
+    57                                  %define PicWidth	[ebp-4]
+    58                                  %define PicHeight	[ebp-8]
+    59                                  %define ptLS        [ebp-12]
+    60                                  %define NoiseSeed   [ebp-16]
+    61                                  %define ptRndGrid   [ebp-20]
+    62                                  %define StartScale  [ebp-24]
+    63                                  %define LastScale   [ebp-28]
+    64                                  %define ptPerGrid   [ebp-32]
+    65                                  %define avmax       [ebp-36]
+    66                                  %define avmin       [ebp-40]
+    67                                  %define ptzColorWt  [ebp-44]
+    68                                  %define ptzSineAdds [ebp-48]
+    69                                  %define WoodType    [ebp-52]
+    70                                  %define MarbleType  [ebp-56]   
+    71                                  %define CosLin		[ebp-60]   
+    72                                  %define CycleSpeed	[ebp-64]   
+    73                                  
+    74                                  
+    75                                  
+    76                                  [bits 32]
+    77                                  
+    78 00000000 55                      	push ebp
+    79 00000001 89E5                    	mov ebp,esp
+    80 00000003 81ECC4000000            	sub esp,196
+    81 00000009 57                      	push edi
+    82 0000000A 56                      	push esi
+    83 0000000B 53                      	push ebx
+    84                                  
+    85                                  ;	LOAD INPUT DATA
+    86                                  
+    87 0000000C 8B5D08                  	mov ebx,[ebp+8]		; ->ptPerStruc
+    88                                  	
+    89                                  	movab PicWidth,		[ebx]
+    90 0000000F FF33                <1>   push dword %2
+    91 00000011 8F45FC              <1>   pop dword %1
+    92                                  	movab PicHeight,	[ebx+4]
+    93 00000014 FF7304              <1>   push dword %2
+    94 00000017 8F45F8              <1>   pop dword %1
+    95                                  	movab ptLS,			[ebx+8]
+    96 0000001A FF7308              <1>   push dword %2
+    97 0000001D 8F45F4              <1>   pop dword %1
+    98                                  	movab NoiseSeed,	[ebx+12]
+    99 00000020 FF730C              <1>   push dword %2
+   100 00000023 8F45F0              <1>   pop dword %1
+   101                                  	movab ptRndGrid,	[ebx+16]
+   102 00000026 FF7310              <1>   push dword %2
+   103 00000029 8F45EC              <1>   pop dword %1
+   104                                  	movab StartScale,	[ebx+20]
+   105 0000002C FF7314              <1>   push dword %2
+   106 0000002F 8F45E8              <1>   pop dword %1
+   107                                  	movab LastScale,	[ebx+24]
+   108 00000032 FF7318              <1>   push dword %2
+   109 00000035 8F45E4              <1>   pop dword %1
+   110                                  	movab ptPerGrid,	[ebx+28]
+   111 00000038 FF731C              <1>   push dword %2
+   112 0000003B 8F45E0              <1>   pop dword %1
+   113                                  	movab avmax,		[ebx+32]
+   114 0000003E FF7320              <1>   push dword %2
+   115 00000041 8F45DC              <1>   pop dword %1
+   116                                  	movab avmin,		[ebx+36]
+   117 00000044 FF7324              <1>   push dword %2
+   118 00000047 8F45D8              <1>   pop dword %1
+   119                                  	movab ptzColorWt,	[ebx+40]
+   120 0000004A FF7328              <1>   push dword %2
+   121 0000004D 8F45D4              <1>   pop dword %1
+   122                                  	movab ptzSineAdds,	[ebx+44]
+   123 00000050 FF732C              <1>   push dword %2
+   124 00000053 8F45D0              <1>   pop dword %1
+   125                                  	movab WoodType,		[ebx+48]
+   126 00000056 FF7330              <1>   push dword %2
+   127 00000059 8F45CC              <1>   pop dword %1
+   128                                  	movab MarbleType,	[ebx+52]
+   129 0000005C FF7334              <1>   push dword %2
+   130 0000005F 8F45C8              <1>   pop dword %1
+   131                                  	movab CosLin,		[ebx+56]
+   132 00000062 FF7338              <1>   push dword %2
+   133 00000065 8F45C4              <1>   pop dword %1
+   134                                  	movab CycleSpeed,	[ebx+60]
+   135 00000068 FF733C              <1>   push dword %2
+   136 0000006B 8F45C0              <1>   pop dword %1
+   137                                  
+   138                                  ; ----------------------------
+   139                                  ;
+   140                                  ; OpCode& = 0  Random noise for RndGrid()
+   141                                  ; OpCode& = 1  Perlin noise
+   142                                  ; OpCode& = 2  Wood
+   143                                  ; OpCode& = 4  Marble
+   144                                  ; OpCode& = 8  Smooth
+   145                                  ; OpCode& = 16 Cycle colors
+   146                                  	
+   147                                  ; GET OpCode&
+   148                                  
+   149 0000006E 8B4514                  	mov eax,[ebp+20]
+   150 00000071 3D00000000              	cmp eax,0
+   151 00000076 750A                    	jne TestFor1
+   152 00000078 E87E000000              	CALL RANDNOISE
+   153 0000007D E95A000000              	jmp GETOUT
+   154                                  TestFor1:
+   155 00000082 D1D8                    	rcr eax,1
+   156 00000084 730F                    	jnc TestFor2
+   157 00000086 E870000000              	CALL RANDNOISE
+   158 0000008B E88F000000              	CALL PERLIN
+   159 00000090 E947000000              	jmp GETOUT
+   160                                  TestFor2:
+   161 00000095 D1D8                    	rcr eax,1
+   162 00000097 730F                    	jnc TestFor4
+   163 00000099 E83C050000              	CALL SINENOISE
+   164 0000009E E8CC050000              	CALL WOOD
+   165 000000A3 E934000000              	jmp GETOUT
+   166                                  TestFor4:
+   167 000000A8 D1D8                    	rcr eax,1
+   168 000000AA 7314                    	jnc TestFor8
+   169 000000AC E84A000000              	CALL RANDNOISE
+   170 000000B1 E869000000              	CALL PERLIN
+   171 000000B6 E80A080000              	CALL MARBLE
+   172 000000BB E91C000000              	jmp GETOUT
+   173                                  TestFor8:
+   174 000000C0 D1D8                    	rcr eax,1
+   175 000000C2 730A                    	jnc TestFor16
+   176 000000C4 E878090000              	CALL SMOOTH
+   177 000000C9 E90E000000              	jmp GETOUT
+   178                                  
+   179                                  TestFor16:
+   180 000000CE D1D8                    	rcr eax,1
+   181 000000D0 730A                    	jnc TestFor32
+   182 000000D2 E8F1090000              	CALL CYCLE
+   183 000000D7 E900000000              	jmp GETOUT
+   184                                  
+   185                                  TestFor32:
+   186                                  
+   187                                  GETOUT:
+   188                                  
+   189                                  
+   190 000000DC 5B                      	pop ebx
+   191 000000DD 5E                      	pop esi
+   192 000000DE 5F                      	pop edi
+   193 000000DF 89EC                    	mov esp,ebp
+   194 000000E1 5D                      	pop ebp
+   195 000000E2 C21000                  	RET 16
+   196                                  
+   197                                  ;-----------------------------------------------------------------
+   198                                  	; WAIT FOR SCREEN REFRESH TO FINISH
+   199                                  	; Need 3 waits to be sure of getting
+   200                                  	; maximum time for re-drawing screen
+   201                                  	; Probably not necessary when using
+   202                                  	; StretchDIBits
+   203                                  	
+   204 000000E5 66BADA03                	mov   dx,03DAh		; Status register
+   205                                  	
+   206                                  WaitForOFF:
+   207 000000E9 EC                      	in    al,dx			; Will NT allow this 'in' instruction ??
+   208 000000EA A808                    	test  al,8			; Is scan OFF
+   209 000000EC 75FB                    	jnz   WaitForOFF	; No, keep waiting
+   210                                  	
+   211                                  WaitForON:
+   212 000000EE EC                      	in    al,dx     
+   213 000000EF A808                    	test  al,8	  		; Is scan ON
+   214 000000F1 74FB                    	jz    WaitForON		; No, keep waiting
+   215                                  	
+   216                                  WaitForOFF2:
+   217 000000F3 EC                      	in    al,dx     
+   218 000000F4 A808                    	test  al,8			; Is scan OFF
+   219 000000F6 75FB                    	jnz   WaitForOFF2	; No, keep waiting
+   220                                  ;-----------------------------------------------------------------
+   221                                  
+   222                                  
+   223 000000F8 C21000                  	ret 16
+   224                                  ;=====================================================
+   225                                  
+   226                                  RANDNOISE:
+   227                                  
+   228 000000FB 8B7DEC                  	mov edi,ptRndGrid	; ptr to RndGrid(1,1)
+   229 000000FE 8B45FC                  	mov eax,PicWidth
+   230 00000101 8B5DF8                  	mov ebx,PicHeight
+   231 00000104 F7E3                    	mul ebx
+   232 00000106 89C1                    	mov ecx,eax
+   233                                  nexran:
+   234 00000108 B813180100              	mov eax,011813h	 	; 71699 prime 
+   235 0000010D F76DF0                  	imul DWORD NoiseSeed
+   236 00000110 0509B20A00              	add eax, 0AB209h 	; 700937 prime
+   237 00000115 D1D8                    	rcr eax,1			; leaving out gives vertical lines plus
+   238                                  						; faint horizontal ones, tartan
+   239                                  
+   240                                  	;----------------------------------------
+   241                                  	;jc ok				; these 2 have little effect
+   242                                  	;rol eax,1			;
+   243                                  ok:						;
+   244                                  	;----------------------------------------
+   245                                  	
+   246                                  	;----------------------------------------
+   247                                  	;dec eax			; these produce vert lines
+   248                                  	;inc eax			; & with fsin marble arches
+   249                                  	;----------------------------------------
+   250                                  
+   251 00000117 8945F0                  	mov NoiseSeed,eax	; save seed
+   252                                  	
+   253                                  	;----------------------------------------
+   254                                  	;fild dword NoiseSeed	; makes diagonals, repetitive marble
+   255                                  	;fsin					; fcos smooth no structure
+   256                                  	;fistp dword NoiseSeed
+   257                                  	;----------------------------------------
+   258                                  	
+   259                                  	;and eax,0FFh		; can leave out but Fh 7h 3h 2h 1h all work
+   260                                  						; giving similar but different fuzzy patterns
+   261                                  						; Suggests that all that may be required is a
+   262                                  						; random pattern of 1's and 0's.
+   263                                  						
+   264 0000011A AA                      	stosb				; mov [edi],AL, inc edi 
+   265                                  
+   266 0000011B 49                      	dec ecx
+   267 0000011C 75EA                    	jnz nexran
+   268                                  	
+   269 0000011E C3                      RET
+   270                                  ;=====================================================
+   271                                  
+   272                                  PERLIN:
+   273                                  
+   274                                  %define sca		[ebp-68]	; sca init = StartScale
+   275                                  %define j		[ebp-72]	; j = PicHeight To 2 Step -2
+   276                                  %define jg		[ebp-76]	; jg = ((j-1) \ sca) + 1   IntDiv
+   277                                  %define i		[ebp-80]	; i = PicWidth To 2 Step -2
+   278                                  %define ig		[ebp-84]	; ig = ((i-1) \ sca) + 1   IntDiv
+   279                                  %define ix0		[ebp-88]	; ix0 = (ig-1) * sca
+   280                                  %define iy0		[ebp-92]	; iy0 = (jg-1) * sca
+   281                                  %define ix1		[ebp-96]	; ix1 = ig * sca
+   282                                  %define iy1		[ebp-100]	; iy1 = jg * sca
+   283                                  
+   284                                  %define X0		[ebp-104]
+   285                                  %define Y0		[ebp-108]
+   286                                  %define X1		[ebp-112]
+   287                                  %define Y1		[ebp-116]
+   288                                  
+   289                                  %define zs		[ebp-120]
+   290                                  %define zt		[ebp-124]
+   291                                  %define zu		[ebp-128]
+   292                                  %define zv		[ebp-132]
+   293                                  
+   294                                  %define zSx		[ebp-136]
+   295                                  %define zSy		[ebp-140]
+   296                                  
+   297                                  %define PerGridij	[ebp-144]		; PerGrid(i,j)
+   298                                  %define xavyavsca	[ebp-148]		; (xav + yav) * sca
+   299                                  
+   300                                  %define zmult		[ebp-152]		; 256/(avmax - avmin)
+   301                                  %define cul			[ebp-156]
+   302                                  
+   303                                  %define num2		[ebp-160]		; 2
+   304                                  %define num3		[ebp-164]		; 3
+   305                                  %define num255		[ebp-168]		; 255
+   306                                  
+   307                                  %define zColorWt0	[ebp-172]
+   308                                  %define zColorWt1	[ebp-176]
+   309                                  %define zColorWt2	[ebp-180]
+   310                                  
+   311                                  %define iculr		[ebp-184]
+   312                                  %define iculg		[ebp-188]
+   313                                  %define iculb		[ebp-192]
+   314                                  %define zp			[ebp-196]		; pi#/2
+   315                                  
+   316                                  
+   317 0000011F B8A0860100              	mov eax,100000
+   318 00000124 8945D8                  	mov avmin,eax
+   319 00000127 F7D8                    	neg eax
+   320 00000129 8945DC                  	mov avmax,eax
+   321                                  
+   322 0000012C B802000000              	mov eax,2
+   323 00000131 898560FFFFFF            	mov num2,eax
+   324 00000137 40                      	inc eax
+   325 00000138 89855CFFFFFF            	mov num3,eax
+   326 0000013E B8FF000000              	mov eax,255
+   327 00000143 898558FFFFFF            	mov num255,eax
+   328                                  	
+   329 00000149 D9EB                    	fldpi
+   330 0000014B DB8560FFFFFF            	fild dword num2
+   331 00000151 DEF9                    	fdivp st1			; st1/st0 = pi/2
+   332 00000153 D99D3CFFFFFF            	fstp dword zp
+   333                                  
+   334 00000159 8B45E8                  	mov eax,StartScale
+   335                                  
+   336                                  MAINDO:
+   337 0000015C 8945BC                  	mov sca,eax
+   338 0000015F 8B45F8                  	mov eax,PicHeight
+   339                                  FORJ:
+   340 00000162 8945B8                  	mov j,eax
+   341 00000165 48                      	dec eax				; (j-1)
+   342 00000166 8B5DBC                  	mov ebx,sca
+   343 00000169 BA00000000              	mov edx,0
+   344 0000016E F7F3                    	div ebx				; (j-1)\sca  ;;OVF
+   345 00000170 40                      	inc eax
+   346 00000171 8945B4                  	mov jg,eax			; jg = ((j-1)\sca) + 1
+   347                                  
+   348 00000174 8B45FC                  	mov eax,PicWidth
+   349                                  FORI:
+   350 00000177 8945B0                  	mov i,eax
+   351 0000017A 48                      	dec eax				; (i-1)
+   352 0000017B 8B5DBC                  	mov ebx,sca
+   353 0000017E BA00000000              	mov edx,0
+   354 00000183 F7F3                    	div ebx				; (i-1)\sca
+   355 00000185 40                      	inc eax
+   356 00000186 8945AC                  	mov ig,eax			; ig = ((i-1)\sca) + 1
+   357                                  		
+   358 00000189 8B45AC                  	mov eax,ig			; Get pix coords from RndGrid coords
+   359 0000018C 48                      	dec eax
+   360 0000018D 8B5DBC                  	mov ebx,sca
+   361 00000190 F7E3                    	mul ebx
+   362 00000192 8945A8                  	mov ix0,eax			; ix0 = (ig-1)*sca
+   363                                  
+   364 00000195 8B45B4                  	mov eax,jg
+   365 00000198 48                      	dec eax
+   366 00000199 8B5DBC                  	mov ebx,sca
+   367 0000019C F7E3                    	mul ebx
+   368 0000019E 8945A4                  	mov iy0,eax			; iy0 = (jg-1)*sca
+   369                                  
+   370 000001A1 8B45AC                  	mov eax,ig
+   371 000001A4 8B5DBC                  	mov ebx,sca
+   372 000001A7 F7E3                    	mul ebx
+   373 000001A9 8945A0                  	mov ix1,eax			; ix1 = ig*sca
+   374                                  	
+   375 000001AC 8B45B4                  	mov eax,jg
+   376 000001AF 8B5DBC                  	mov ebx,sca
+   377 000001B2 F7E3                    	mul ebx
+   378 000001B4 89459C                  	mov iy1,eax			; iy1 = jg*sca
+   379                                  
+   380 000001B7 8B45C4                  	mov eax,CosLin
+   381 000001BA 3D01000000              	cmp eax,1
+   382 000001BF 0F84E3010000            	JE Near LINEAR		; Linear Else Cosine smoothing
+   383                                  	
+   384                                  	; COSINE smoothing -------------
+   385 000001C5 DB45B0                  	fild dword i		
+   386 000001C8 DB45A8                  	fild dword ix0
+   387 000001CB DEE9                    	fsubp st1			; st1-st0 = i-ix0
+   388 000001CD D9853CFFFFFF            	fld dword zp
+   389 000001D3 DEC9                    	fmulp st1			; zp*(i-ix0)
+   390 000001D5 DB45BC                  	fild dword sca
+   391 000001D8 DEF9                    	fdivp st1			; st1/st0 = zp*(i-ix0)/sca
+   392 000001DA D9FF                    	fcos
+   393 000001DC D95D98                  	fstp dword X0		; X0 = Cos(zp*(i-ix0)/sca)
+   394                                  
+   395 000001DF DB45B8                  	fild dword j		
+   396 000001E2 DB45A4                  	fild dword iy0
+   397 000001E5 DEE9                    	fsubp st1			; st1-st0 = j-iy0
+   398 000001E7 D9853CFFFFFF            	fld dword zp
+   399 000001ED DEC9                    	fmulp st1			; zp*(j-iy0)
+   400 000001EF DB45BC                  	fild dword sca
+   401 000001F2 DEF9                    	fdivp st1			; st1/st0 = zp*(j-iy0)/sca
+   402 000001F4 D9FF                    	fcos
+   403 000001F6 D95D94                  	fstp dword Y0		; Y0 = Cos(zp*(j-iy0)/sca)
+   404                                  	
+   405 000001F9 DB45A0                  	fild dword ix1
+   406 000001FC DB45B0                  	fild dword i
+   407 000001FF DEE9                    	fsubp st1			; st1-st0 = ix1-i
+   408 00000201 D9853CFFFFFF            	fld dword zp
+   409 00000207 DEC9                    	fmulp st1			; zp*(ix1-i)
+   410 00000209 DB45BC                  	fild dword sca
+   411 0000020C DEF9                    	fdivp st1			; st1/st0 = zp*(ix1-i)/sca
+   412 0000020E D9FF                    	fcos
+   413 00000210 D95D90                  	fstp dword X1		; X1 = Cos(zp*(ix1-i)/sca)
+   414                                  	
+   415 00000213 DB459C                  	fild dword iy1
+   416 00000216 DB45B8                  	fild dword j
+   417 00000219 DEE9                    	fsubp st1			; st1-st0 = iy1-j
+   418 0000021B D9853CFFFFFF            	fld dword zp
+   419 00000221 DEC9                    	fmulp st1			; zp*(iy1-j)
+   420 00000223 DB45BC                  	fild dword sca
+   421 00000226 DEF9                    	fdivp st1			; st1/st0 = zp*(iy1-j)/sca
+   422 00000228 D9FF                    	fcos
+   423 0000022A D95D8C                  	fstp dword Y1		; Y1 = Cos(zp*(iy1-j)/sca)
+   424                                  	; End Cosine smoothing -------------
+   425                                  
+   426                                  	; Cosine Vector dot, RndGrid() bytes -------
+   427 0000022D 8B45B4                  	mov eax,jg
+   428 00000230 48                      	dec eax
+   429 00000231 8B5DFC                  	mov ebx,PicWidth
+   430 00000234 F7E3                    	mul ebx
+   431 00000236 8B5DAC                  	mov ebx,ig
+   432 00000239 4B                      	dec ebx
+   433 0000023A 01D8                    	add eax,ebx
+   434 0000023C 8B7DEC                  	mov edi,ptRndGrid
+   435 0000023F 01C7                    	add edi,eax			; -> RndGrid(ig,jg)
+   436 00000241 0FB607                  	movzx eax,byte[edi]
+   437 00000244 894588                  	mov zs,eax			; RndGrid(ig,jg)
+   438 00000247 DB4588                  	fild dword zs
+   439 0000024A D94598                  	fld dword X0
+   440 0000024D D94594                  	fld dword Y0
+   441 00000250 DEC1                    	faddp st1
+   442 00000252 D9E8                    	fld1
+   443 00000254 DEE9                    	fsubp st1			; st1-st0 = (X0+Y0-1)
+   444 00000256 DEC9                    	fmulp st1
+   445 00000258 D95D88                  	fstp dword zs		; zs = RndGrid(ig,jg)*(X0+Y0-1)
+   446                                  	
+   447 0000025B 47                      	inc edi
+   448 0000025C 0FB607                  	movzx eax,byte[edi]
+   449 0000025F 894584                  	mov zt,eax			; RndGrid(ig+1,jg)
+   450 00000262 DB4584                  	fild dword zt
+   451 00000265 D94590                  	fld dword X1
+   452 00000268 D94594                  	fld dword Y0
+   453 0000026B DEC1                    	faddp st1
+   454 0000026D D9E8                    	fld1
+   455 0000026F DEE9                    	fsubp st1			; st1-st0 = (X1+Y0-1)
+   456 00000271 DEC9                    	fmulp st1
+   457 00000273 D95D84                  	fstp dword zt		; zt = RndGrid(ig+1,jg)*(X1+Y0-1)
+   458                                  
+   459 00000276 4F                      	dec edi				; -> RndGrid(ig,jg)
+   460 00000277 8B45FC                  	mov eax,PicWidth
+   461 0000027A 01C7                    	add edi,eax			; -> RndGrid(ig,jg+1)
+   462 0000027C 0FB607                  	movzx eax,byte[edi]
+   463 0000027F 894580                  	mov zu,eax			; RndGrid(ig,jg+1)
+   464 00000282 DB4580                  	fild dword zu
+   465 00000285 D94598                  	fld dword X0
+   466 00000288 D9458C                  	fld dword Y1
+   467 0000028B DEC1                    	faddp st1
+   468 0000028D D9E8                    	fld1
+   469 0000028F DEE9                    	fsubp st1			; st1-st0 = (X0+Y1-1)
+   470 00000291 DEC9                    	fmulp st1
+   471 00000293 D95D80                  	fstp dword zu		; zu = RndGrid(ig,jg+1)*(X0+Y1-1)
+   472                                  	
+   473 00000296 47                      	inc edi				; -> RndGrid(ig+1,jg+1)
+   474 00000297 0FB607                  	movzx eax,byte[edi]
+   475 0000029A 89857CFFFFFF            	mov zv,eax
+   476 000002A0 DB857CFFFFFF            	fild dword zv
+   477 000002A6 D94590                  	fld dword X1
+   478 000002A9 D9458C                  	fld dword Y1
+   479 000002AC DEC1                    	faddp st1
+   480 000002AE D9E8                    	fld1
+   481 000002B0 DEE9                    	fsubp st1			; st1-st0 = (X1+Y1-1)
+   482 000002B2 DEC9                    	fmulp st1
+   483 000002B4 D99D7CFFFFFF            	fstp dword zv		; zv = RndGrid(ig+1,jg+1)*(X1+Y1-1)
+   484                                  	; End Vector dot -----------------------
+   485                                  
+   486                                  	; EASE curve ---------------------------
+   487 000002BA DB45B0                  	fild dword i		; Restore X0
+   488 000002BD DB45A8                  	fild dword ix0
+   489 000002C0 DEE9                    	fsubp st1			; st1-st0 = i-ix0
+   490 000002C2 DB45BC                  	fild dword sca
+   491 000002C5 DEF9                    	fdivp st1			; st1/st0 = (i-ix0)/sca
+   492 000002C7 D95D98                  	fstp dword X0		; X0 = (i-ix0)/sca
+   493 000002CA DB45B8                  	fild dword j		; Restore Y0
+   494 000002CD DB45A4                  	fild dword iy0
+   495 000002D0 DEE9                    	fsubp st1			; st1-st0 = j-iy0
+   496 000002D2 DB45BC                  	fild dword sca
+   497 000002D5 DEF9                    	fdivp st1			; st1/st0 = (j-iy0)/sca
+   498 000002D7 D95D94                  	fstp dword Y0		; Y0 = (j-iy0)/sca
+   499                                  	;----------------------
+   500 000002DA DB855CFFFFFF            	fild dword num3		; zSx = 3*X0^2 - 2*X0^3
+   501 000002E0 D94598                  	fld dword X0
+   502 000002E3 D94598                  	fld dword X0
+   503 000002E6 DEC9                    	fmulp st1			; X0^2
+   504 000002E8 DEC9                    	fmulp st1			; 3*X0^2
+   505 000002EA DB8560FFFFFF            	fild dword num2
+   506 000002F0 D94598                  	fld dword X0
+   507 000002F3 D94598                  	fld dword X0
+   508 000002F6 DEC9                    	fmulp st1			; X0^2
+   509 000002F8 D94598                  	fld dword X0
+   510 000002FB DEC9                    	fmulp st1			; X0^3
+   511 000002FD DEC9                    	fmulp st1			; 2*X0^3
+   512 000002FF DEE9                    	fsubp st1			; st1-st0 = zSx = 3*X0^2 - 2*X0^3
+   513 00000301 D99578FFFFFF            	fst dword zSx		; zSx,zSx
+   514                                  	
+   515 00000307 D94584                  	fld dword zt
+   516 0000030A D94588                  	fld dword zs
+   517 0000030D DEE9                    	fsubp st1			; st1-st0 = zt-zs
+   518 0000030F DEC9                    	fmulp st1			; zSx*(zt-zs)
+   519 00000311 D94588                  	fld dword zs
+   520 00000314 DEC1                    	faddp st1			; xa = zs + zSx*(zt-zs)
+   521                                  	
+   522 00000316 D98578FFFFFF            	fld dword zSx
+   523 0000031C D9857CFFFFFF            	fld dword zv
+   524 00000322 D94580                  	fld dword zu
+   525 00000325 DEE9                    	fsubp st1			; st1-st0 = zv-zu
+   526 00000327 DEC9                    	fmulp st1			; zSx*(zv-zu)
+   527 00000329 D94580                  	fld dword zu
+   528 0000032C DEC1                    	faddp st1			; xb = zu + zSx*(zv-zu)
+   529                                  	
+   530 0000032E DEC1                    	faddp st1			; xa + xb
+   531 00000330 DB8560FFFFFF            	fild dword num2
+   532 00000336 DEF9                    	fdivp st1			; st1/sto = (xa+xb)/2
+   533                                  	
+   534 00000338 DB855CFFFFFF            	fild dword num3		; zSy = 3*Y0^2 - 2*Y0^3
+   535 0000033E D94594                  	fld dword Y0
+   536 00000341 D94594                  	fld dword Y0
+   537 00000344 DEC9                    	fmulp st1			; Y0^2
+   538 00000346 DEC9                    	fmulp st1			; 3*Y0^2
+   539 00000348 DB8560FFFFFF            	fild dword num2
+   540 0000034E D94594                  	fld dword Y0
+   541 00000351 D94594                  	fld dword Y0
+   542 00000354 DEC9                    	fmulp st1			; Y0^2
+   543 00000356 D94594                  	fld dword Y0
+   544 00000359 DEC9                    	fmulp st1			; Y0^3
+   545 0000035B DEC9                    	fmulp st1			; 2*Y0^3
+   546 0000035D DEE9                    	fsubp st1			; st1-st0 = zSy = 3*Y0^2 - 2*Y0^3
+   547 0000035F D99574FFFFFF            	fst dword zSy		; zSy,zSy
+   548                                  		
+   549 00000365 D94580                  	fld dword zu
+   550 00000368 D94588                  	fld dword zs
+   551 0000036B DEE9                    	fsubp st1			; st1-st0 = zu-zs
+   552 0000036D DEC9                    	fmulp st1			; zSy*(zu-zs)
+   553 0000036F D94588                  	fld dword zs
+   554 00000372 DEC1                    	faddp st1			; ya = zs + zSy*(zu-zs)
+   555                                  		
+   556 00000374 D98574FFFFFF            	fld dword zSy
+   557 0000037A D9857CFFFFFF            	fld dword zv
+   558 00000380 D94584                  	fld dword zt
+   559 00000383 DEE9                    	fsubp st1			; st1-st0 = zv-zt
+   560 00000385 DEC9                    	fmulp st1			; zSy*(zv-zt)
+   561 00000387 D94584                  	fld dword zt
+   562 0000038A DEC1                    	faddp st1			; xb = zt + zSy*(zv-zt)
+   563                                  		
+   564 0000038C DEC1                    	faddp st1			; ya + yb
+   565 0000038E DB8560FFFFFF            	fild dword num2
+   566 00000394 DEF9                    	fdivp st1			; st1/sto = (ya+yb)/2
+   567                                  	
+   568 00000396 DEC1                    	faddp st1			; (xa+xb)/2 + (ya+yb)/2
+   569 00000398 DB45BC                  	fild dword sca
+   570 0000039B DEC9                    	fmulp st1			; ((xa+xb)/2 + (ya+yb)/2) * sca
+   571                                  	
+   572 0000039D DB9D6CFFFFFF            	fistp dword xavyavsca	; = ((xa+xb)/2 + (ya+yb)/2) * sca
+   573                                  	; End EASE curve ---------------------------
+   574 000003A3 E9A9000000              	JMP AVAV
+   575                                  
+   576                                  
+   577                                  LINEAR:
+   578                                  	; LINEAR Vector dot, RndGrid() bytes -------
+   579                                  
+   580                                  	;   sca2zs = RndGrid(ig, jg) * (sca - i + ix0) * (sca - j + iy0)
+   581                                  	;   sca2zt = RndGrid(ig + 1, jg) * (sca - ix1 + i) * (sca - j + iy0)
+   582                                  	;   sca2zu = RndGrid(ig, jg + 1) * (sca - i + ix0) * (sca - iy1 + j)
+   583                                  	;   sca2zv = RndGrid(ig + 1, jg + 1) * (sca - ix1 + i) * (sca - iy1 + j)
+   584                                  	;      
+   585                                  	;   izav = (sca2zs + sca2zt + sca2zu + sca2zv) / sca   ' in effect * Sca to decrease the
+   586                                  	;                                                      ' amp of higher freqs
+   587                                  	;      
+   588                                  	;  PerGrid(i, j) = PerGrid(i, j) + izav
+   589                                  
+   590 000003A8 8B45B4                  	mov eax,jg
+   591 000003AB 48                      	dec eax
+   592 000003AC 8B5DFC                  	mov ebx,PicWidth
+   593 000003AF F7E3                    	mul ebx
+   594 000003B1 8B5DAC                  	mov ebx,ig
+   595 000003B4 4B                      	dec ebx
+   596 000003B5 01D8                    	add eax,ebx
+   597 000003B7 8B7DEC                  	mov edi,ptRndGrid
+   598 000003BA 01C7                    	add edi,eax			; -> RndGrid(ig,jg)
+   599 000003BC 0FB607                  	movzx eax,byte[edi]
+   600                                  	
+   601                                  ;   sca2zs = RndGrid(ig, jg) * (sca - i + ix0) * (sca - j + iy0)
+   602 000003BF 8B5DBC                  	mov ebx,sca
+   603 000003C2 2B5DB0                  	sub ebx,i			; sca-i
+   604 000003C5 035DA8                  	add ebx,ix0			; sca-i+ix0
+   605 000003C8 F7E3                    	mul ebx
+   606 000003CA 8B5DBC                  	mov ebx,sca
+   607 000003CD 2B5DB8                  	sub ebx,j			; sca-j
+   608 000003D0 035DA4                  	add ebx,iy0			; sca-j+iy0
+   609 000003D3 F7E3                    	mul ebx
+   610 000003D5 894588                  	mov zs,eax
+   611                                  	;------------------	
+   612                                  	
+   613 000003D8 47                      	inc edi
+   614 000003D9 0FB607                  	movzx eax,byte[edi]
+   615                                  
+   616                                  ;   sca2zt = RndGrid(ig + 1, jg) * (sca - ix1 + i) * (sca - j + iy0)
+   617 000003DC 8B5DBC                  	mov ebx,sca
+   618 000003DF 2B5DA0                  	sub ebx,ix1
+   619 000003E2 035DB0                  	add ebx,i
+   620 000003E5 F7E3                    	mul ebx
+   621 000003E7 8B5DBC                  	mov ebx,sca
+   622 000003EA 2B5DB8                  	sub ebx,j
+   623 000003ED 035DA4                  	add ebx,iy0
+   624 000003F0 F7E3                    	mul ebx
+   625 000003F2 894584                  	mov zt,eax
+   626                                  	;------------------	
+   627                                  
+   628 000003F5 4F                      	dec edi				; -> RndGrid(ig,jg)
+   629 000003F6 8B45FC                  	mov eax,PicWidth
+   630 000003F9 01C7                    	add edi,eax			; -> RndGrid(ig,jg+1)
+   631 000003FB 0FB607                  	movzx eax,byte[edi]
+   632                                  
+   633                                  ;   sca2zu = RndGrid(ig, jg + 1) * (sca - i + ix0) * (sca - iy1 + j)
+   634 000003FE 8B5DBC                  	mov ebx,sca
+   635 00000401 2B5DB0                  	sub ebx,i
+   636 00000404 035DA8                  	add ebx,ix0
+   637 00000407 F7E3                    	mul ebx
+   638 00000409 8B5DBC                  	mov ebx,sca
+   639 0000040C 2B5D9C                  	sub ebx,iy1
+   640 0000040F 035DB8                  	add ebx,j
+   641 00000412 F7E3                    	mul ebx
+   642 00000414 894580                  	mov zu,eax
+   643                                  	;------------------	
+   644                                  
+   645 00000417 47                      	inc edi				; -> RndGrid(ig+1,jg+1)
+   646 00000418 0FB607                  	movzx eax,byte[edi]
+   647                                  
+   648                                  ;   sca2zv = RndGrid(ig + 1, jg + 1) * (sca - ix1 + i) * (sca - iy1 + j)
+   649 0000041B 8B5DBC                  	mov ebx,sca
+   650 0000041E 2B5DA0                  	sub ebx,ix1
+   651 00000421 035DB0                  	add ebx,i
+   652 00000424 F7E3                    	mul ebx
+   653 00000426 8B5DBC                  	mov ebx,sca
+   654 00000429 2B5D9C                  	sub ebx,iy1
+   655 0000042C 035DB8                  	add ebx,j
+   656 0000042F F7E3                    	mul ebx
+   657 00000431 89857CFFFFFF            	mov zv,eax
+   658                                  
+   659                                  ;   izav = (sca2zs + sca2zt + sca2zu + sca2zv) / sca
+   660                                  ;   PerGrid(i, j) = PerGrid(i, j) + izav
+   661 00000437 8B4588                  	mov eax,zs
+   662 0000043A 034584                  	add eax,zt
+   663 0000043D 034580                  	add eax,zu
+   664 00000440 03857CFFFFFF            	add eax,zv
+   665 00000446 8B5DBC                  	mov ebx,sca
+   666 00000449 F7F3                    	div ebx
+   667 0000044B 89856CFFFFFF            	mov xavyavsca,eax
+   668                                  	
+   669                                  AVAV:		; Finalising Linear & Cosine smoothing
+   670                                  	; Fill PerGrid() Long integer --------------
+   671 00000451 8B45B8                  	mov eax,j
+   672 00000454 48                      	dec eax
+   673 00000455 8B5DFC                  	mov ebx,PicWidth
+   674 00000458 F7E3                    	mul ebx				; eax = (j-1)*PicWidth
+   675 0000045A 8B5DB0                  	mov ebx,i
+   676 0000045D 4B                      	dec ebx				; ebx = (i-1)
+   677 0000045E 01D8                    	add eax,ebx			; eax = (j-1)*PicWidth+(i-1) 
+   678 00000460 C1E002                  	shl eax,2			; eax = 4 * [(j-1)*PicWidth+(i-1)]
+   679 00000463 8B7DE0                  	mov edi,ptPerGrid
+   680 00000466 01C7                    	add edi,eax			; -> PerGrid(i,j)
+   681                                  
+   682 00000468 8B07                    	mov eax,[edi]
+   683 0000046A 03856CFFFFFF            	add eax,xavyavsca
+   684 00000470 8907                    	mov [edi],eax		; PerGrid(i,j) = PerGrid(i,j) + xavyavsca
+   685 00000472 898570FFFFFF            	mov PerGridij,eax	; PerGrid(i,j)
+   686 00000478 89C2                    	mov edx,eax			; edx=PerGrid(i,j)
+   687                                  	
+   688 0000047A B804000000              	mov eax,4			; Fill in odd points
+   689 0000047F 29C7                    	sub edi,eax			; -> PerGrid(i-1,j)
+   690 00000481 8917                    	mov [edi],edx
+   691 00000483 01C7                    	add edi,eax			; -> PerGrid(i,j)
+   692 00000485 8B45FC                  	mov eax,PicWidth
+   693 00000488 C1E002                  	shl eax,2			; 4*PicWidth
+   694 0000048B 29C7                    	sub edi,eax			; -> PerGrid(i,j-1)
+   695 0000048D 8917                    	mov [edi],edx
+   696 0000048F B804000000              	mov eax,4
+   697 00000494 29C7                    	sub edi,eax			; -> PerGrid(i-1,j-1)
+   698 00000496 8917                    	mov [edi],edx
+   699                                  	; End Fill PerGrid() Long integer --------------
+   700                                  	
+   701                                  	; Find max/min ---------------------------------
+   702 00000498 8B8570FFFFFF            	mov eax,PerGridij
+   703 0000049E 3B45D8                  	cmp eax,avmin		; eax-avmin
+   704 000004A1 7D08                    	jge Testmax
+   705 000004A3 8945D8                  	mov avmin,eax
+   706 000004A6 E908000000              	jmp NEXTI
+   707                                  Testmax:
+   708 000004AB 3B45DC                  	cmp eax,avmax		; eax-avmax
+   709 000004AE 7E03                    	jle NEXTI
+   710 000004B0 8945DC                  	mov avmax,eax
+   711                                  	; End Find max/min ---------------------------------
+   712                                  	
+   713                                  NEXTI:
+   714 000004B3 8B45B0                  	mov eax,i
+   715 000004B6 48                      	dec eax
+   716 000004B7 48                      	dec eax
+   717 000004B8 3D02000000              	cmp eax,2
+   718 000004BD 0F8DB4FCFFFF            	jge Near FORI
+   719                                  
+   720 000004C3 8B45B8                  	mov eax,j
+   721 000004C6 48                      	dec eax
+   722 000004C7 48                      	dec eax
+   723 000004C8 3D02000000              	cmp eax,2
+   724 000004CD 0F8D8FFCFFFF            	jge Near FORJ
+   725                                  	
+   726                                  	; Decrease scale
+   727 000004D3 8B45BC                  	mov eax,sca
+   728 000004D6 D1E8                    	shr eax,1			; sca\2
+   729 000004D8 3B45E4                  	cmp eax,LastScale
+   730 000004DB 0F8D7BFCFFFF            	jge Near MAINDO
+   731                                  	;------------------------------------
+   732                                  
+   733                                  	; Scale color -----------------------
+   734 000004E1 DB8558FFFFFF            	fild dword num255
+   735 000004E7 DB45DC                  	fild dword avmax
+   736 000004EA DB45D8                  	fild dword avmin
+   737 000004ED DEE9                    	fsubp st1			; st1-st0 = avmax-avmin
+   738 000004EF DEF9                    	fdivp st1			; st1/st0 = 255/(avmax-avmin)
+   739 000004F1 D99D68FFFFFF            	fstp dword zmult
+   740                                  	; End Scale color -----------------------
+   741                                  	
+   742                                  	; Get zColorWt0,1,2 -----------------------
+   743 000004F7 8B7DD4                  	mov edi,ptzColorWt
+   744 000004FA D907                    	fld dword [edi]
+   745 000004FC D99D54FFFFFF            	fstp dword zColorWt0
+   746 00000502 D94704                  	fld dword [edi+4]
+   747 00000505 D99D50FFFFFF            	fstp dword zColorWt1
+   748 0000050B D94708                  	fld dword [edi+8]
+   749 0000050E D99D4CFFFFFF            	fstp dword zColorWt2
+   750                                  	; End Get zColorWt0,1,2 -----------------------
+   751                                  	
+   752                                  	; Set pixels from scaled PerGrid(i,j) -------
+   753                                  
+   754                                  	; Calc LongSurf(PicWidth,PicHeight) address
+   755 00000514 8B45F8                  	mov eax,PicHeight
+   756 00000517 48                      	dec eax
+   757 00000518 8B5DFC                  	mov ebx,PicWidth	; i
+   758 0000051B F7E3                    	mul ebx				; eax = (j-1)*PicWidth
+   759 0000051D 4B                      	dec ebx				; ebx = (i-1)
+   760 0000051E 01D8                    	add eax,ebx
+   761 00000520 C1E002                  	shl eax,2			; eax = 4 * [(j-1)*PicWidth+(i-1)]
+   762                                  	
+   763 00000523 8B7DF4                  	mov edi,ptLS		; -> LongSurf(1,1)
+   764 00000526 01C7                    	add edi,eax			; edi -> LongSurf(PicWidth,PicHeight)
+   765                                  
+   766 00000528 FD                      	std					; decr edi for stosd
+   767                                  	
+   768                                  	; Calc PerGrid(PicWidth,PicHeight) address
+   769 00000529 8B45F8                  	mov eax,PicHeight
+   770 0000052C 48                      	dec eax
+   771 0000052D 8B5DFC                  	mov ebx,PicWidth
+   772 00000530 F7E3                    	mul ebx				; eax = (j-1)*PicWidth
+   773 00000532 4B                      	dec ebx				; (i-1)
+   774 00000533 01D8                    	add eax,ebx
+   775 00000535 C1E002                  	shl eax,2			; eax = 4 * [(j-1)*PicWidth+(i-1)]
+   776 00000538 8B75E0                  	mov esi,ptPerGrid	; -> PerGrid(1,1)
+   777 0000053B 01C6                    	add esi,eax			; esi -> PerGrid(PicWidth,PicHeight)
+   778                                  
+   779 0000053D 8B45F8                  	mov eax,PicHeight
+   780                                  FJ:
+   781 00000540 8945B8                  	mov j,eax
+   782 00000543 8B4DFC                  	mov ecx,PicWidth
+   783                                  FI:
+   784 00000546 DB06                    	fild dword [esi]	; PerGrid(i,j)
+   785 00000548 DB45D8                  	fild dword avmin
+   786 0000054B DEE9                    	fsubp st1			; st1-sto = PerGrid(i,j)-avmin
+   787 0000054D D98568FFFFFF            	fld dword zmult
+   788 00000553 DEC9                    	fmulp st1			; cul = (PerGrid(i,j)-avmin) * zmult
+   789 00000555 D99564FFFFFF            	fst dword cul		; cul, cul
+   790                                  
+   791 0000055B D98554FFFFFF            	fld dword zColorWt0	; Multiply RGB by color weights
+   792 00000561 DEC9                    	fmulp st1
+   793 00000563 DB9D48FFFFFF            	fistp dword iculr
+   794                                  	
+   795 00000569 D98564FFFFFF            	fld dword cul
+   796 0000056F D98550FFFFFF            	fld dword zColorWt1
+   797 00000575 DEC9                    	fmulp st1
+   798 00000577 DB9D44FFFFFF            	fistp dword iculg
+   799                                  	
+   800 0000057D D98564FFFFFF            	fld dword cul
+   801 00000583 D9854CFFFFFF            	fld dword zColorWt2
+   802 00000589 DEC9                    	fmulp st1
+   803 0000058B DB9D40FFFFFF            	fistp dword iculb
+   804                                  	
+   805 00000591 0FB68540FFFFFF          	movzx eax,byte iculb	; Make long color
+   806 00000598 0FB69D44FFFFFF          	movzx ebx,byte iculg
+   807 0000059F C1E308                  	shl ebx,8
+   808 000005A2 09D8                    	or eax,ebx
+   809 000005A4 0FB69D48FFFFFF          	movzx ebx,byte iculr
+   810 000005AB C1E310                  	shl ebx,16
+   811 000005AE 09D8                    	or eax,ebx				; eax = HiB ARGB LoB
+   812                                  
+   813 000005B0 AB                      	stosd				; mov [edi],eax & edi-4
+   814                                  	
+   815 000005B1 B804000000              	mov eax,4
+   816 000005B6 29C6                    	sub esi,eax			; esi-4 Next PerGrid()
+   817                                  
+   818 000005B8 49                      	dec ecx
+   819 000005B9 0F8587FFFFFF            	jnz Near FI
+   820                                  	
+   821 000005BF 8B45B8                  	mov eax,j
+   822 000005C2 48                      	dec eax
+   823 000005C3 0F8577FFFFFF            	jnz Near FJ
+   824                                  
+   825 000005C9 FC                      	cld					; Restore direction flag
+   826                                  
+   827 000005CA 8B5D08                  	mov ebx,[ebp+8]		; ->ptPerStruc
+   828                                  	movab [ebx+32],avmax
+   829 000005CD FF75DC              <1>   push dword %2
+   830 000005D0 8F4320              <1>   pop dword %1
+   831                                  	movab [ebx+36],avmin
+   832 000005D3 FF75D8              <1>   push dword %2
+   833 000005D6 8F4324              <1>   pop dword %1
+   834                                  
+   835 000005D9 C3                      RET
+   836                                  ;=====================================================
+   837                                  
+   838                                  SINENOISE:
+   839                                  
+   840                                  %define T1		[ebp-68]	; T1 = 4 * PicWidth
+   841                                  %define T2		[ebp-72]	; T2 = T1/2
+   842                                  %define T4		[ebp-76]	; T3 = T1/4
+   843                                  %define num2	[ebp-80]	; 2
+   844                                  %define num3	[ebp-84]	; 3
+   845                                  %define IX		[ebp-88]	; IX
+   846                                  %define zp2		[ebp-92]	; 2*pi#
+   847                                  
+   848 000005DA 8B45FC                  	mov eax,PicWidth
+   849 000005DD C1E002                  	shl eax,2
+   850 000005E0 8945BC                  	mov T1,eax			; 4*PicWidth
+   851 000005E3 D1E8                    	shr eax,1
+   852 000005E5 8945B8                  	mov T2,eax			; T1/2
+   853 000005E8 D1E8                    	shr eax,1
+   854 000005EA 8945B4                  	mov T4,eax			; T1/4
+   855                                  	
+   856 000005ED B802000000              	mov eax,2
+   857 000005F2 8945B0                  	mov num2,eax
+   858 000005F5 40                      	inc eax
+   859 000005F6 8945AC                  	mov num3,eax
+   860                                  	
+   861 000005F9 D9EB                    	fldpi
+   862 000005FB DB45B0                  	fild dword num2
+   863 000005FE DEC9                    	fmulp st1
+   864 00000600 D95DA4                  	fstp dword zp2		; 2*pi
+   865                                  	
+   866                                  	; Get addresses to zSineAdds()
+   867 00000603 8B45B8                  	mov eax,T2		; T1/2
+   868 00000606 48                      	dec eax
+   869 00000607 C1E002                  	shl eax,2		; 4*T2
+   870 0000060A 8B7DD0                  	mov edi,ptzSineAdds
+   871 0000060D 01C7                    	add edi,eax		; ->zSineAdds(IX)
+   872                                  	
+   873 0000060F 8B45FC                  	mov eax,PicWidth
+   874 00000612 C1E002                  	shl eax,2
+   875 00000615 8B5DB8                  	mov ebx,T2
+   876 00000618 29D8                    	sub eax,ebx		; 4*PicWidth-IX
+   877 0000061A C1E002                  	shl eax,2		; 4*(4*PicWidth-IX)
+   878 0000061D 8B75D0                  	mov esi,ptzSineAdds
+   879 00000620 01C6                    	add esi,eax		; ->zSineAdds(4*PicWidth+1-IX)
+   880                                  	
+   881                                  	
+   882 00000622 8B4DB8                  	mov ecx,T2
+   883                                  FORIX:
+   884 00000625 894DA8                  	mov IX,ecx
+   885                                  	
+   886 00000628 D945A4                  	fld dword zp2
+   887 0000062B DB45A8                  	fild dword IX
+   888 0000062E DEC9                    	fmulp st1
+   889 00000630 DB45BC                  	fild dword T1
+   890 00000633 DEF9                    	fdivp st1		;st1/sto = zp*IX/T1
+   891 00000635 D9FE                    	fsin
+   892                                  	
+   893 00000637 D945A4                  	fld dword zp2
+   894 0000063A DB45A8                  	fild dword IX
+   895 0000063D DEC9                    	fmulp st1
+   896 0000063F DB45B8                  	fild dword T2
+   897 00000642 DEF9                    	fdivp st1		;st1/sto = zp*IX/T2
+   898 00000644 D9FE                    	fsin
+   899                                  	
+   900 00000646 D945A4                  	fld dword zp2
+   901 00000649 DB45A8                  	fild dword IX
+   902 0000064C DEC9                    	fmulp st1
+   903 0000064E DB45B4                  	fild dword T4
+   904 00000651 DEF9                    	fdivp st1		;st1/sto = zp*IX/T4
+   905 00000653 D9FE                    	fsin
+   906                                  	
+   907 00000655 DEC1                    	faddp st1		; Y1+Y2
+   908 00000657 DEC1                    	faddp st1		; Y1+Y2+Y3
+   909 00000659 DB45AC                  	fild dword num3
+   910 0000065C DEF9                    	fdivp st1		; st1/st0 = (Y1+Y2+Y3)/3
+   911                                  	
+   912 0000065E D917                    	fst dword [edi]
+   913 00000660 D91E                    	fstp dword [esi]
+   914                                  	
+   915 00000662 B804000000              	mov eax,4
+   916 00000667 29C7                    	sub edi,eax
+   917 00000669 01C6                    	add esi,eax
+   918                                  	
+   919 0000066B 49                      	dec ecx
+   920 0000066C 75B7                    	jnz FORIX
+   921                                  
+   922 0000066E C3                      RET
+   923                                  ;=====================================================
+   924                                  
+   925                                  WOOD:
+   926                                  
+   927                                  %define AMP		[ebp-68]	; 16
+   928                                  %define ixx		[ebp-72]
+   929                                  %define iyy		[ebp-76]
+   930                                  %define zr		[ebp-80]
+   931                                  %define zalpha	[ebp-84]
+   932                                  %define zSA		[ebp-88]
+   933                                  %define zs		[ebp-92]
+   934                                  %define zRed	[ebp-96]
+   935                                  %define zGreen	[ebp-100]
+   936                                  %define zBlue	[ebp-104]
+   937                                  %define iRed	[ebp-108]
+   938                                  %define iGreen	[ebp-112]
+   939                                  %define iBlue	[ebp-116]
+   940                                  %define IX		[ebp-120]
+   941                                  %define IY		[ebp-124]
+   942                                  %define zColWt0	[ebp-128]
+   943                                  %define zColWt1	[ebp-132]
+   944                                  %define zColWt2	[ebp-136]
+   945                                  %define num16	[ebp-140]	; 16
+   946                                  %define nm2		[ebp-144]	; 2
+   947                                  %define zp17	[ebp-148]	; .17
+   948                                  %define zp08	[ebp-152]	; .08
+   949                                  %define numb100	[ebp-156]	; 100
+   950                                  %define z1mr	[ebp-160]	; (1-zr)
+   951                                  %define nm255	[ebp-164]	; 255
+   952                                  %define nsa		[ebp-168]	; for zSineAdds(nsa)
+   953                                  
+   954 0000066F B801000000              	mov eax,1
+   955 00000674 898558FFFFFF            	mov nsa,eax
+   956                                  	
+   957 0000067A B810000000              	mov eax,16
+   958 0000067F 8945BC                  	mov AMP,eax
+   959                                  	
+   960 00000682 B810000000              	mov eax,16
+   961 00000687 898574FFFFFF            	mov num16,eax
+   962                                  	
+   963 0000068D B802000000              	mov eax,2
+   964 00000692 898570FFFFFF            	mov nm2,eax
+   965                                  	
+   966 00000698 B864000000              	mov eax,100
+   967 0000069D 898564FFFFFF            	mov numb100,eax
+   968                                  	
+   969                                  	; Multipliers for color weightings
+   970 000006A3 B811000000              	mov eax,17
+   971 000006A8 89856CFFFFFF            	mov zp17,eax
+   972 000006AE DB856CFFFFFF            	fild dword zp17
+   973 000006B4 DB8564FFFFFF            	fild dword numb100
+   974 000006BA DEF9                    	fdivp st1			; st1/sto = 17/100 = .17
+   975 000006BC D99D6CFFFFFF            	fstp dword zp17
+   976                                  	
+   977 000006C2 B808000000              	mov eax,8
+   978 000006C7 898568FFFFFF            	mov zp08,eax
+   979 000006CD DB8568FFFFFF            	fild dword zp08
+   980 000006D3 DB8564FFFFFF            	fild dword numb100
+   981 000006D9 DEF9                    	fdivp st1			; st1/sto = 8/100 = .08
+   982 000006DB D99D68FFFFFF            	fstp dword zp08
+   983                                  	
+   984 000006E1 B8FF000000              	mov eax,255
+   985 000006E6 89855CFFFFFF            	mov nm255,eax
+   986                                  	
+   987                                  	
+   988                                  	; Get zColorWt0,1,2 -----------------------
+   989 000006EC 8B7DD4                  	mov edi,ptzColorWt
+   990 000006EF D907                    	fld dword [edi]
+   991 000006F1 D95D80                  	fstp dword zColWt0
+   992 000006F4 D94704                  	fld dword [edi+4]
+   993 000006F7 D99D7CFFFFFF            	fstp dword zColWt1
+   994 000006FD D94708                  	fld dword [edi+8]
+   995 00000700 D99D78FFFFFF            	fstp dword zColWt2
+   996                                  	; End Get zColorWt0,1,2 -----------------------
+   997                                  
+   998                                  	; Calc LongSurf(PicWidth,PicHeight) address
+   999 00000706 8B45F8                  	mov eax,PicHeight
+  1000 00000709 48                      	dec eax
+  1001 0000070A 8B5DFC                  	mov ebx,PicWidth	; i
+  1002 0000070D F7E3                    	mul ebx				; eax = (j-1)*PicWidth
+  1003 0000070F 4B                      	dec ebx				; ebx = (i-1)
+  1004 00000710 01D8                    	add eax,ebx
+  1005 00000712 C1E002                  	shl eax,2			; eax = 4 * [(j-1)*PicWidth+(i-1)]
+  1006                                  	
+  1007 00000715 8B7DF4                  	mov edi,ptLS		; -> LongSurf(1,1)
+  1008 00000718 01C7                    	add edi,eax			; edi -> LongSurf(PicWidth,PicHeight)
+  1009                                  
+  1010 0000071A FD                      	std					; decr edi for stosd
+  1011                                  	
+  1012 0000071B 8B45F8                  	mov eax,PicHeight
+  1013                                  FRIY:
+  1014 0000071E 894584                  	mov IY,eax
+  1015                                  	
+  1016 00000721 8B8558FFFFFF            	mov eax,nsa			; Get zSA
+  1017 00000727 48                      	dec eax
+  1018 00000728 C1E002                  	shl eax,2			; 4*(nsa-1)
+  1019 0000072B 8B75D0                  	mov esi,ptzSineAdds
+  1020 0000072E 01C6                    	add esi,eax			; ->zSineAdds(nsa)
+  1021 00000730 D906                    	fld dword [esi]
+  1022 00000732 DB45BC                  	fild dword AMP
+  1023 00000735 DEC9                    	fmulp st1			; zSA
+  1024 00000737 D95DA8                  	fstp dword zSA
+  1025                                  
+  1026 0000073A 8B45FC                  	mov eax,PicWidth
+  1027                                  FRIX:
+  1028 0000073D 894588                  	mov IX,eax
+  1029                                  	
+  1030 00000740 8B5DFC                  	mov ebx,PicWidth
+  1031 00000743 D1EB                    	shr ebx,1			; ebx = PicWidth/2
+  1032 00000745 29D8                    	sub eax,ebx
+  1033 00000747 8945B8                  	mov ixx,eax
+  1034                                  	
+  1035 0000074A 8B4584                  	mov eax,IY
+  1036 0000074D 8B5DF8                  	mov ebx,PicHeight
+  1037 00000750 D1EB                    	shr ebx,1			; ebx = PicHeight/2
+  1038 00000752 29D8                    	sub eax,ebx
+  1039 00000754 8945B4                  	mov iyy,eax
+  1040                                  
+  1041 00000757 8B45CC                  	mov eax,WoodType
+  1042 0000075A 3D00000000              	cmp eax,0
+  1043 0000075F 751C                    	jne TestWoodType1
+  1044                                  	
+  1045 00000761 DB45B8                  	fild dword ixx		; WoodType 0 RINGS
+  1046 00000764 DB45B8                  	fild dword ixx
+  1047 00000767 DEC9                    	fmulp st1	
+  1048 00000769 DB45B4                  	fild dword iyy
+  1049 0000076C DB45B4                  	fild dword iyy
+  1050 0000076F DEC9                    	fmulp st1	
+  1051 00000771 DEC1                    	faddp st1
+  1052 00000773 D9FA                    	fsqrt
+  1053 00000775 D95DB0                  	fstp dword zr		; zr = Sqr(ixx^2+iyy^2)
+  1054                                  	
+  1055 00000778 E936000000              	jmp GetAlpha
+  1056                                  TestWoodType1:
+  1057 0000077D 3D01000000              	cmp eax,1
+  1058 00000782 7512                    	jne  TestWoodType2
+  1059                                  
+  1060 00000784 DB45B8                  	fild dword ixx		; WoodType 1 LINES
+  1061 00000787 DB45B4                  	fild dword iyy
+  1062 0000078A DEC1                    	faddp st1
+  1063 0000078C D9E1                    	fabs
+  1064 0000078E D95DB0                  	fstp dword zr		; zr = Abs(ixx+iyy)
+  1065                                  	
+  1066 00000791 E91D000000              	jmp GetAlpha
+  1067                                  TestWoodType2:
+  1068                                  
+  1069 00000796 DB45B8                  	fild dword ixx		; WoodType 2 CELLS
+  1070 00000799 DB45B8                  	fild dword ixx
+  1071 0000079C DEC9                    	fmulp st1	
+  1072 0000079E DB45B4                  	fild dword iyy
+  1073 000007A1 DB45B4                  	fild dword iyy
+  1074 000007A4 DEC9                    	fmulp st1	
+  1075 000007A6 DEC1                    	faddp st1
+  1076 000007A8 DB8574FFFFFF            	fild dword num16
+  1077 000007AE DEF9                    	fdivp st1			; st1/st0 = Abs(ixx^2+iyy^2)/16
+  1078 000007B0 D95DB0                  	fstp dword zr		; zr = Abs(ixx^2+iyy^2)/16
+  1079                                  	
+  1080                                  GetAlpha:
+  1081 000007B3 DB45B4                  	fild dword iyy
+  1082 000007B6 DB45B8                  	fild dword ixx
+  1083 000007B9 D9F3                    	fpatan				; atan(st1/st0) = atan(iyy/ixx)
+  1084 000007BB D95DAC                  	fstp dword zalpha
+  1085                                  	
+  1086 000007BE D945AC                  	fld dword zalpha	; zalpha
+  1087 000007C1 DB8570FFFFFF            	fild dword nm2
+  1088 000007C7 DEC9                    	fmulp st1
+  1089 000007C9 D9FE                    	fsin				; sin(2*zalpha)
+  1090 000007CB D945B0                  	fld dword zr
+  1091 000007CE DEC9                    	fmulp st1			; zr*sin(2*zalpha)
+  1092 000007D0 D945A8                  	fld dword zSA
+  1093 000007D3 DEF9                    	fdivp st1			; st1/st0 = zs = Sin(2*zalpha) * zr/zSA 
+  1094                                  	
+  1095 000007D5 D945B0                  	fld dword zr
+  1096 000007D8 DEC1                    	faddp st1
+  1097 000007DA D9E1                    	fabs				; zr = Abs(zr + zs) 
+  1098                                  	
+  1099 000007DC DB5DB0                  	fistp dword zr		; izr
+  1100 000007DF 8B45B0                  	mov eax,zr
+  1101 000007E2 250F000000              	and eax,0Fh			; izr Mod 16
+  1102 000007E7 8945B0                  	mov zr,eax
+  1103 000007EA DB45B0                  	fild dword zr
+  1104 000007ED DB8574FFFFFF            	fild dword num16
+  1105 000007F3 DEF9                    	fdivp st1			; st1/st0 = zr = (zr Mod 16)/16 (0-1)
+  1106 000007F5 D95DB0                  	fstp dword zr
+  1107                                  	
+  1108 000007F8 D9E8                    	fld1
+  1109 000007FA D945B0                  	fld dword zr
+  1110 000007FD DEE9                    	fsubp st1			; st1-st0 = 1-zr
+  1111 000007FF D99560FFFFFF            	fst dword z1mr
+  1112                                  	
+  1113 00000805 D9856CFFFFFF            	fld dword zp17
+  1114 0000080B DEC9                    	fmulp st1			; 0.17*(1-zr)
+  1115 0000080D D945B0                  	fld dword zr
+  1116 00000810 DEC1                    	faddp st1			; zr + 0.17*(1-zr)
+  1117 00000812 D94580                  	fld dword zColWt0
+  1118 00000815 DEC9                    	fmulp st1			; zColorWt(0)*(zr + 0.17*(1-zr))
+  1119 00000817 DB855CFFFFFF            	fild dword nm255
+  1120 0000081D DEC9                    	fmulp st1
+  1121 0000081F DB5D94                  	fistp dword iRed	; zRed*255 
+  1122                                  	
+  1123 00000822 D98560FFFFFF            	fld dword z1mr		; (1-zr)
+  1124 00000828 D98568FFFFFF            	fld dword zp08		
+  1125 0000082E DEC9                    	fmulp st1			; 0.08*(1-zr)
+  1126 00000830 D945B0                  	fld dword zr
+  1127 00000833 DEC1                    	faddp st1			; zr + 0.08*(1-zr)
+  1128 00000835 D9857CFFFFFF            	fld dword zColWt1
+  1129 0000083B DEC9                    	fmulp st1			; zColorWt(1)*(zr + 0.08*(1-zr))
+  1130 0000083D DB855CFFFFFF            	fild dword nm255
+  1131 00000843 DEC9                    	fmulp st1
+  1132 00000845 DB5D90                  	fistp dword iGreen	; zGreen*255 
+  1133                                  
+  1134 00000848 D98560FFFFFF            	fld dword z1mr		; (1-zr)
+  1135 0000084E D9856CFFFFFF            	fld dword zp17		
+  1136 00000854 DEC9                    	fmulp st1			; 0.17*(1-zr)
+  1137 00000856 D945B0                  	fld dword zr
+  1138 00000859 DEC1                    	faddp st1			; zr + 0.17*(1-zr)
+  1139 0000085B D98578FFFFFF            	fld dword zColWt2
+  1140 00000861 DEC9                    	fmulp st1			; zColorWt(1)*(zr + 0.17*(1-zr))
+  1141 00000863 DB855CFFFFFF            	fild dword nm255
+  1142 00000869 DEC9                    	fmulp st1
+  1143 0000086B DB5D8C                  	fistp dword iBlue	; zBlue*255 
+  1144                                  	
+  1145                                  	; Make up long color
+  1146 0000086E 8B458C                  	mov eax,iBlue
+  1147 00000871 25FF000000              	and eax,255
+  1148 00000876 8B5D90                  	mov ebx,iGreen
+  1149 00000879 81E3FF000000            	and ebx,255
+  1150 0000087F C1E308                  	shl ebx,8
+  1151 00000882 09D8                    	or eax,ebx
+  1152 00000884 8B5D94                  	mov ebx,iRed
+  1153 00000887 81E3FF000000            	and ebx,255
+  1154 0000088D C1E310                  	shl ebx,16
+  1155 00000890 09D8                    	or eax,ebx			; eax =  HiB ARGB LoB
+  1156                                  	
+  1157 00000892 AB                      	stosd				; mov [edi],eax & edi-4
+  1158                                  
+  1159 00000893 8B4588                  	mov eax,IX
+  1160 00000896 48                      	dec eax
+  1161 00000897 0F85A0FEFFFF            	jnz Near FRIX
+  1162                                  	
+  1163 0000089D 8B8558FFFFFF            	mov eax,nsa
+  1164 000008A3 40                      	inc eax				; nsa+1
+  1165 000008A4 8B5DFC                  	mov ebx,PicWidth
+  1166 000008A7 C1E302                  	shl ebx,2			; 4*PicWidth
+  1167 000008AA 39D8                    	cmp eax,ebx			; nsa-4*PicWidth
+  1168 000008AC 7C05                    	jl nsaOK
+  1169 000008AE B801000000              	mov eax,1
+  1170                                  nsaOK:
+  1171 000008B3 898558FFFFFF            	mov nsa,eax
+  1172                                  	
+  1173 000008B9 8B4584                  	mov eax,IY
+  1174 000008BC 48                      	dec eax
+  1175 000008BD 0F855BFEFFFF            	jnz Near FRIY
+  1176                                  	
+  1177 000008C3 FC                      	cld					; Restore direction flag
+  1178 000008C4 C3                      RET
+  1179                                  ;=====================================================
+  1180                                  
+  1181                                  MARBLE:
+  1182                                  
+  1183                                  %define zAMP		[ebp-68]	; .5
+  1184                                  %define zSinVal		[ebp-72]	; zAmp*Sin(zN*pi#+1)
+  1185                                  %define MiRed		[ebp-76]
+  1186                                  %define MiGreen		[ebp-80]
+  1187                                  %define MiBlue		[ebp-84]
+  1188                                  %define zMColWt0	[ebp-88]
+  1189                                  %define zMColWt1	[ebp-92]
+  1190                                  %define zMColWt2	[ebp-96]
+  1191                                  %define z2p			[ebp-100]	; 2
+  1192                                  %define zp65		[ebp-104]	; .65
+  1193                                  %define z2p1		[ebp-108]	; 2.1
+  1194                                  %define num100		[ebp-112]	; 100
+  1195                                  %define nm255M		[ebp-116]	; 255
+  1196                                  %define avmaxmin	[ebp-120]	; avmax-avmin
+  1197                                  %define NMUL		[ebp-124]	; MarbleType 0 4, 1 12, 2 20
+  1198                                  
+  1199 000008C5 B864000000              	mov eax,100
+  1200 000008CA 894590                  	mov num100,eax
+  1201                                  	
+  1202 000008CD B8FF000000              	mov eax,255
+  1203 000008D2 89458C                  	mov nm255M,eax
+  1204                                  
+  1205                                  	; zAMP
+  1206 000008D5 B832000000              	mov eax,50
+  1207 000008DA 8945BC                  	mov zAMP,eax
+  1208 000008DD DB45BC                  	fild dword zAMP
+  1209 000008E0 DB4590                  	fild dword num100
+  1210 000008E3 DEF9                    	fdivp st1			; st1/sto = 50/100 = .5
+  1211 000008E5 D95DBC                  	fstp dword zAMP
+  1212                                  	
+  1213                                  	; Multipliers for color weightings
+  1214 000008E8 B802000000              	mov eax,2
+  1215 000008ED 89459C                  	mov z2p,eax
+  1216 000008F0 DB459C                  	fild dword z2p
+  1217 000008F3 D95D9C                  	fstp dword z2p		; 2.0
+  1218                                  	
+  1219 000008F6 B841000000              	mov eax,65
+  1220 000008FB 894598                  	mov zp65,eax
+  1221 000008FE DB4598                  	fild dword zp65
+  1222 00000901 DB4590                  	fild dword num100
+  1223 00000904 DEF9                    	fdivp st1			; st1/sto = 65/100 = .65
+  1224 00000906 D95D98                  	fstp dword zp65
+  1225                                  
+  1226 00000909 B8D2000000              	mov eax,210
+  1227 0000090E 894594                  	mov z2p1,eax
+  1228 00000911 DB4594                  	fild dword z2p1
+  1229 00000914 DB4590                  	fild dword num100
+  1230 00000917 DEF9                    	fdivp st1			; st1/sto = 210/100 = 2.1
+  1231 00000919 D95D94                  	fstp dword z2p1
+  1232                                  	
+  1233                                  	; Get zColorWt0,1,2 -----------------------
+  1234 0000091C 8B7DD4                  	mov edi,ptzColorWt
+  1235 0000091F D907                    	fld dword [edi]
+  1236 00000921 D95DA8                  	fstp dword zMColWt0
+  1237 00000924 D94704                  	fld dword [edi+4]
+  1238 00000927 D95DA4                  	fstp dword zMColWt1
+  1239 0000092A D94708                  	fld dword [edi+8]
+  1240 0000092D D95DA0                  	fstp dword zMColWt2
+  1241                                  	; End Get zColorWt0,1,2 -----------------------
+  1242                                  
+  1243                                  	; Set NMUL according to MarbleType
+  1244 00000930 8B45C8                  	mov eax,MarbleType
+  1245 00000933 3D00000000              	cmp eax,0
+  1246 00000938 750A                    	jne TestMarble1
+  1247 0000093A B804000000              	mov eax,4
+  1248 0000093F E916000000              	jmp SaveMarbleType
+  1249                                  TestMarble1:
+  1250 00000944 3D01000000              	cmp eax,1
+  1251 00000949 750A                    	jne TestMarble2
+  1252 0000094B B80C000000              	mov eax,12
+  1253 00000950 E905000000              	jmp SaveMarbleType
+  1254                                  TestMarble2:
+  1255 00000955 B814000000              	mov eax,20
+  1256                                  SaveMarbleType:
+  1257 0000095A 894584                  	mov NMUL,eax
+  1258                                  	
+  1259                                  	; Calc (avmax-avmin)	
+  1260 0000095D 8B45DC                  	mov eax,avmax
+  1261 00000960 8B5DD8                  	mov ebx,avmin
+  1262 00000963 29D8                    	sub eax,ebx				; avmax-avmin
+  1263 00000965 894588                  	mov avmaxmin,eax
+  1264                                  	
+  1265                                  
+  1266                                  	; Calc PerGrid(PicWidth,PicHeight) address
+  1267 00000968 8B45F8                  	mov eax,PicHeight
+  1268 0000096B 48                      	dec eax
+  1269 0000096C 8B5DFC                  	mov ebx,PicWidth
+  1270 0000096F F7E3                    	mul ebx				; eax = (j-1)*PicWidth
+  1271 00000971 4B                      	dec ebx				; (i-1)
+  1272 00000972 01D8                    	add eax,ebx
+  1273 00000974 C1E002                  	shl eax,2			; eax = 4 * [(j-1)*PicWidth+(i-1)]
+  1274 00000977 8B75E0                  	mov esi,ptPerGrid	; -> PerGrid(1,1)
+  1275 0000097A 01C6                    	add esi,eax			; esi -> PerGrid(PicWidth,PicHeight)
+  1276                                  
+  1277                                  	; Calc LongSurf(PicWidth,PicHeight) address
+  1278 0000097C 8B45F8                  	mov eax,PicHeight
+  1279 0000097F 48                      	dec eax
+  1280 00000980 8B5DFC                  	mov ebx,PicWidth	; i
+  1281 00000983 F7E3                    	mul ebx				; eax = (j-1)*PicWidth
+  1282 00000985 4B                      	dec ebx				; ebx = (i-1)
+  1283 00000986 01D8                    	add eax,ebx
+  1284 00000988 C1E002                  	shl eax,2			; eax = 4 * [(j-1)*PicWidth+(i-1)]
+  1285                                  	
+  1286 0000098B 8B7DF4                  	mov edi,ptLS		; -> LongSurf(1,1)
+  1287 0000098E 01C7                    	add edi,eax			; edi -> LongSurf(PicWidth,PicHeight)
+  1288                                  
+  1289 00000990 FD                      	std					; decr edi for stosd
+  1290                                  	
+  1291 00000991 8B55F8                  	mov edx,PicHeight
+  1292                                  MFRIY:
+  1293                                  	
+  1294 00000994 8B4DFC                  	mov ecx,PicWidth
+  1295                                  MFRIX:
+  1296                                  	
+  1297 00000997 DB06                    	fild dword [esi]	; PerGrid(IX,IY)
+  1298 00000999 DB45D8                  	fild dword avmin
+  1299 0000099C DEE9                    	fsubp st1			; st1-st0 = PerGrid(IX,IY)-avmin
+  1300 0000099E DB4588                  	fild dword avmaxmin
+  1301 000009A1 DEF9                    	fdivp st1			; zN = (PerGrid(IX,IY)-avmin)/(avmax-avmin)
+  1302                                  	
+  1303 000009A3 DB4584                  	fild dword NMUL
+  1304 000009A6 DEC9                    	fmulp st1			; zN = NMUL * zN
+  1305 000009A8 D9EB                    	fldpi
+  1306 000009AA DEC9                    	fmulp st1			; zN*pi
+  1307 000009AC D9E8                    	fld1
+  1308 000009AE DEC1                    	faddp st1			; zN*pi + 1
+  1309 000009B0 D9FE                    	fsin
+  1310 000009B2 D945BC                  	fld dword zAMP
+  1311 000009B5 DEC9                    	fmulp st1
+  1312 000009B7 D95DB8                  	fstp dword zSinVal	; zSinVal = zAMP * Sin(zN*pi + 1)
+  1313                                  	
+  1314                                  	; Get weighted colors
+  1315 000009BA D945B8                  	fld dword zSinVal
+  1316 000009BD D9459C                  	fld dword z2p
+  1317 000009C0 DEC9                    	fmulp st1			; 2.0*zSinVal
+  1318 000009C2 D9E8                    	fld1
+  1319 000009C4 DEC1                    	faddp st1			; 1 + 2.0*zSinVal
+  1320 000009C6 D945A8                  	fld dword zMColWt0
+  1321 000009C9 DEC9                    	fmulp st1			; zColorWt(0)*(1 + 2.0*zSinVal)
+  1322 000009CB DB458C                  	fild dword nm255M
+  1323 000009CE DEC9                    	fmulp st1
+  1324 000009D0 DB5DB4                  	fistp dword MiRed	; zRed*255
+  1325                                  	
+  1326 000009D3 D945B8                  	fld dword zSinVal
+  1327 000009D6 D94598                  	fld dword zp65
+  1328 000009D9 DEC9                    	fmulp st1			; 0.65*zSinVal
+  1329 000009DB D9E8                    	fld1
+  1330 000009DD DEC1                    	faddp st1			; 1 + 0.65*zSinVal
+  1331 000009DF D945A4                  	fld dword zMColWt1
+  1332 000009E2 DEC9                    	fmulp st1			; zColorWt(1)*(1 + 0.65*zSinVal)
+  1333 000009E4 DB458C                  	fild dword nm255M
+  1334 000009E7 DEC9                    	fmulp st1
+  1335 000009E9 DB5DB0                  	fistp dword MiGreen	; zGreen*255
+  1336                                  
+  1337 000009EC D945B8                  	fld dword zSinVal
+  1338 000009EF D94594                  	fld dword z2p1
+  1339 000009F2 DEC9                    	fmulp st1			; 2.1*zSinVal
+  1340 000009F4 D9E8                    	fld1
+  1341 000009F6 DEC1                    	faddp st1			; 1 + 2.1*zSinVal
+  1342 000009F8 D945A0                  	fld dword zMColWt2
+  1343 000009FB DEC9                    	fmulp st1			; zColorWt(2)*(1 + 2.1*zSinVal)
+  1344 000009FD DB458C                  	fild dword nm255M
+  1345 00000A00 DEC9                    	fmulp st1
+  1346 00000A02 DB5DAC                  	fistp dword MiBlue	; zBlue*255
+  1347                                  
+  1348                                  	; Make up long color
+  1349 00000A05 8B45AC                  	mov eax,MiBlue
+  1350 00000A08 25FF000000              	and eax,255
+  1351 00000A0D 8B5DB0                  	mov ebx,MiGreen
+  1352 00000A10 81E3FF000000            	and ebx,255
+  1353 00000A16 C1E308                  	shl ebx,8
+  1354 00000A19 09D8                    	or eax,ebx
+  1355 00000A1B 8B5DB4                  	mov ebx,MiRed
+  1356 00000A1E 81E3FF000000            	and ebx,255
+  1357 00000A24 C1E310                  	shl ebx,16
+  1358 00000A27 09D8                    	or eax,ebx			; eax =  HiB ARGB LoB
+  1359                                  	
+  1360 00000A29 AB                      	stosd				; mov [edi],eax & edi-4
+  1361                                  
+  1362 00000A2A B804000000              	mov eax,4
+  1363 00000A2F 29C6                    	sub esi,eax			; esi-4
+  1364                                  	
+  1365 00000A31 49                      	dec ecx
+  1366 00000A32 0F855FFFFFFF            	jnz Near MFRIX
+  1367                                  	
+  1368 00000A38 4A                      	dec edx
+  1369 00000A39 0F8555FFFFFF            	jnz Near MFRIY
+  1370                                  	
+  1371 00000A3F FC                      	cld					; Restore direction flag
+  1372                                  
+  1373 00000A40 C3                      RET
+  1374                                  ;=====================================================
+  1375                                  
+  1376                                  SMOOTH:
+  1377                                  
+  1378                                  %define lo32		[ebp-68]
+  1379                                  %define hi32		[ebp-72]
+  1380                                  
+  1381                                  
+  1382 00000A41 8B45F8                  	mov eax,PicHeight
+  1383 00000A44 8B5DFC                  	mov ebx,PicWidth
+  1384 00000A47 F7E3                    	mul ebx
+  1385 00000A49 C1E002                  	shl eax,2			; 4*PicWidth*PicHeight
+  1386 00000A4C 89C1                    	mov ecx,eax
+  1387                                  	
+  1388 00000A4E 8B45FC                  	mov eax,PicWidth
+  1389 00000A51 D1E0                    	shl eax,1			; 2*PicWidth
+  1390 00000A53 40                      	inc eax		
+  1391 00000A54 C1E002                  	shl eax,2			; 4*(2*PicWidth+1)
+  1392 00000A57 29C1                    	sub ecx,eax			; Num bytes from LongSurf(2,2) to
+  1393                                  						; LongSurf(PicWidth,PicHeight-1)
+  1394                                  						; NB Top & Bottom rows will not be smoothed
+  1395                                  						; and this will prevent several rows from
+  1396                                  						; going to one color with repeated smoothing.
+  1397                                  						
+  1398 00000A59 8B7DF4                  	mov edi,ptLS		; -> LongSurf(1,1)
+  1399 00000A5C 8B45FC                  	mov eax,PicWidth
+  1400 00000A5F 40                      	inc eax
+  1401 00000A60 C1E002                  	shl eax,2			; 4*(PicWidth+1)
+  1402 00000A63 01C7                    	add edi,eax			; -> LongSurf(2,2)
+  1403                                  	
+  1404 00000A65 8B5DFC                  	mov ebx,PicWidth
+  1405 00000A68 C1E302                  	shl ebx,2			; 4*PicWidth
+  1406                                  	
+  1407 00000A6B B8FCFCFCFC              	mov eax,0FCFCFCFCh	;Make 8 bytes to mask out
+  1408 00000A70 8945BC                  	mov lo32,eax		;lower 2 bits so that shr 2
+  1409 00000A73 8945B8                  	mov hi32,eax		;divides each byte by 4
+  1410 00000A76 0F6F45B8                	movq mm0,hi32
+  1411                                  	
+  1412                                  NextPix2:	
+  1413                                  	; pick up 4 LongSurf() long integers(4-bytes, 32-bits)
+  1414                                  	; on a cross & add together
+  1415 00000A7A 0F6E4FFC                	movd mm1,[edi-4]
+  1416 00000A7E 0F6E5704                	movd mm2,[edi+4]
+  1417 00000A82 01DF                    	add edi,ebx
+  1418 00000A84 0F6E1F                  	movd mm3,[edi]
+  1419 00000A87 29DF                    	sub edi,ebx
+  1420 00000A89 29DF                    	sub edi,ebx
+  1421 00000A8B 0F6E27                  	movd mm4,[edi]
+  1422 00000A8E 01DF                    	add edi,ebx
+  1423                                  	
+  1424                                  	; AND out 2 lo-bits in each byte so that shift-division 
+  1425                                  	; stays in bytes
+  1426 00000A90 0FDBC8                  	pand mm1,mm0
+  1427 00000A93 0FDBD0                  	pand mm2,mm0
+  1428 00000A96 0FDBD8                  	pand mm3,mm0
+  1429 00000A99 0FDBE0                  	pand mm4,mm0
+  1430                                  	
+  1431                                  	; divide by 4
+  1432 00000A9C 0F73D102                	psrlq mm1,2
+  1433 00000AA0 0F73D202                	psrlq mm2,2
+  1434 00000AA4 0F73D302                	psrlq mm3,2
+  1435 00000AA8 0F73D402                	psrlq mm4,2
+  1436                                  	
+  1437                                  	; add them up (unsigned saturation, will go to one color
+  1438                                  	; eventually, apart from top & bottom row effect, see above) 
+  1439 00000AAC 0FDCCA                  	paddusb mm1,mm2
+  1440 00000AAF 0FDCDC                  	paddusb mm3,mm4
+  1441 00000AB2 0FDCCB                  	paddusb mm1,mm3
+  1442                                  	
+  1443                                  	; mov mm1 lo-32-bits into eax
+  1444 00000AB5 0F7EC8                  	movd eax,mm1
+  1445                                  	
+  1446                                  	; put back to cross center
+  1447 00000AB8 AB                      	stosd				; mov [edi],eax  &  edi+4
+  1448                                  
+  1449 00000AB9 81E904000000            	sub ecx,4
+  1450 00000ABF 0F85B5FFFFFF            	jnz Near NextPix2
+  1451                                  
+  1452 00000AC5 0F77                    	emms				;Clear FP/MMX stack
+  1453                                  
+  1454 00000AC7 C3                      RET
+  1455                                  ;=====================================================
+  1456                                  
+  1457                                  CYCLE:
+  1458                                  
+  1459 00000AC8 8B45F8                  	mov eax,PicHeight
+  1460 00000ACB 8B5DFC                  	mov ebx,PicWidth
+  1461 00000ACE F7E3                    	mul ebx
+  1462 00000AD0 D1E8                    	shr eax,1			; PicWidth*PicHeight/2  8-byte chunks
+  1463 00000AD2 89C1                    	mov ecx,eax
+  1464                                  	
+  1465 00000AD4 C1E902                  	shr ecx,2			; for-32 byte chunks
+  1466                                  	
+  1467 00000AD7 8B7DF4                  	mov edi,ptLS		; -> LongSurf(1,1)
+  1468                                  	
+  1469 00000ADA 8B45C0                  	mov eax,CycleSpeed	; 1,2 or 4
+  1470 00000ADD 3D01000000              	cmp eax,1
+  1471 00000AE2 750A                    	jne CSp2
+  1472 00000AE4 B801010101              	mov eax,01010101h	;Make 8 bytes
+  1473 00000AE9 E916000000              	jmp LoadSpeed
+  1474                                  CSp2:
+  1475 00000AEE 3D02000000              	cmp eax,2
+  1476 00000AF3 750A                    	jne CSp4
+  1477 00000AF5 B802020202              	mov eax,02020202h	;Make 8 bytes		; double speed
+  1478 00000AFA E905000000              	jmp LoadSpeed
+  1479                                  CSp4:
+  1480 00000AFF B804040404              	mov eax,04040404h	;Make 8 bytes		; quad speed
+  1481                                  
+  1482                                  LoadSpeed:
+  1483 00000B04 8945BC                  	mov lo32,eax		;to subtract 1,2 or 4 from each byte
+  1484 00000B07 8945B8                  	mov hi32,eax
+  1485 00000B0A 0F6F65B8                	movq mm4,hi32
+  1486 00000B0E 0F6F6DB8                	movq mm5,hi32
+  1487 00000B12 0F6F75B8                	movq mm6,hi32
+  1488 00000B16 0F6F7DB8                	movq mm7,hi32
+  1489                                  
+  1490 00000B1A BB20000000              	mov ebx,32	;8
+  1491                                  
+  1492                                  NextChunk:
+  1493                                  	
+  1494                                  	; pick up 32 bytes
+  1495 00000B1F 0F6F07                  	movq mm0,[edi]
+  1496 00000B22 0F6F4F08                	movq mm1,[edi+8]
+  1497 00000B26 0F6F5710                	movq mm2,[edi+16]
+  1498 00000B2A 0F6F5F18                	movq mm3,[edi+24]
+  1499                                  
+  1500                                  	; subtract 1,2 or 4 from each byte with overlap ie 0->255
+  1501 00000B2E 0FF8C4                  	psubb mm0,mm4		;sub 8 bytes at a time
+  1502 00000B31 0FF8CD                  	psubb mm1,mm5		;sub 8 bytes at a time
+  1503 00000B34 0FF8D6                  	psubb mm2,mm6		;sub 8 bytes at a time
+  1504 00000B37 0FF8DF                  	psubb mm3,mm7		;sub 8 bytes at a time
+  1505                                  	; could do paddb to brighten first
+  1506                                  	
+  1507                                  	; add/sub 1,2 or 4 from each byte with overlap ie 0->255
+  1508                                  	;paddb mm0,mm4		;add 8 bytes at a time
+  1509                                  	;psubb mm1,mm5		;sub 8 bytes at a time
+  1510                                  	;paddb mm2,mm6		;add 8 bytes at a time
+  1511                                  	;psubb mm3,mm7		;sub 8 bytes at a time
+  1512                                  	; mixing sub & add produces noise behind a vertical grid pattern
+  1513                                  
+  1514                                  	; Using psubusb or paddusb goes to all black 0,0,0 
+  1515                                  	; or all white 255,255,255 min/max unsigned byte
+  1516                                  	
+  1517                                  	; Using psubsb or paddsb goes to all grey 128,128,128 
+  1518                                  	; or all white 255,255,255 min/max signed byte
+  1519                                  
+  1520                                  
+  1521                                  	; put back 32 bytes
+  1522 00000B3A 0F7F07                  	movq [edi],mm0		;with overlap ie 0->255
+  1523 00000B3D 0F7F4F08                	movq [edi+8],mm1	;with overlap ie 0->255
+  1524 00000B41 0F7F5710                	movq [edi+16],mm2	;with overlap ie 0->255
+  1525 00000B45 0F7F5F18                	movq [edi+24],mm3	;with overlap ie 0->255
+  1526                                  
+  1527 00000B49 01DF                    	add edi,ebx
+  1528                                  
+  1529 00000B4B 49                      	dec ecx
+  1530 00000B4C 75D1                    	jnz NextChunk
+  1531 00000B4E 0F77                    	emms			;Clear FP/MMX stack
+  1532                                  
+  1533 00000B50 C3                      ret
+  1534                                  
+  1535                                  ;############################################################
+  1536                                  	
+  1537                                  	;; Testing ;;;;;;;;
+  1538                                  	;mov eax,iBlue
+  1539                                  	;cld
+  1540                                  	;RET
+  1541                                  	;mov ebx,[ebp+12]	; ->zres()
+  1542                                  	;mov eax,zr
+  1543                                  	;mov [ebx],eax
+  1544                                  	;mov eax,zColorWt1
+  1545                                  	;mov [ebx+4],eax
+  1546                                  	;mov eax,zColorWt2
+  1547                                  	;mov [ebx+8],eax
+  1548                                  	;mov eax,zv
+  1549                                  	;mov [ebx+12],eax
+  1550                                  	;cld
+  1551                                  	;RET
+  1552                                  	;;;;;;;;;;;;;;;;;;;
